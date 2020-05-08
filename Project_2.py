@@ -10,6 +10,7 @@ import os
 objPoints = [] # 3D points in real world space
 imgPoints = [] # 2D points in image plane
 
+
 # Camera Calibration
 for curImage_Name in os.listdir("camera_cal/"):
 	curImage_Cali = mpimg.imread('camera_cal/' + curImage_Name)
@@ -33,22 +34,31 @@ for curImage_Name in os.listdir("camera_cal/"):
 		imgPoints.append(corners)
 		objPoints.append(objP)
 
-for curImage_Name in os.listdir("camera_cal/"):
-	curImage_Cali = mpimg.imread('camera_cal/' + curImage_Name)
+for curImage_Name in os.listdir("test_images/"):
+	curImage = mpimg.imread('test_images/' + curImage_Name)
 
 	# Convert to grayscale
-	curImage_Gray = cv2.cvtColor(curImage_Cali, cv2.COLOR_RGB2GRAY)
+	curImage_Gray = cv2.cvtColor(curImage, cv2.COLOR_RGB2GRAY)
 
 	# Calibrate the camera based on the previously determined set of object and image points
 	ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objPoints, imgPoints, curImage_Gray.shape[::-1], None, None)
 
 	# Undistort each image based on our previous calculations
-	curImage_Undistorted = cv2.undistort(curImage_Cali, mtx, dist, None, mtx)
-	cv2.imwrite(os.path.join('output_images/', 'output_' + curImage_Name), curImage_Undistorted)
+	curImage_Undistorted = cv2.undistort(curImage, mtx, dist, None, mtx)
 
-'''
-for imgName in os.listdir("test_images/"):
-	curImage = mpimg.imread('test_images/' + imgName)
-	curImage_Output = cv2.cvtColor(curImage, cv2.COLOR_RGBA2BGRA)
-	cv2.imwrite(os.path.join('output_images/', 'output_' + imgName), curImage_Output)
-'''
+	# Convert to HLS color space and separate L and S channels
+	curImage_HLS = cv2.cvtColor(curImage_Undistorted, cv2.COLOR_RGB2HLS)
+	lightness_channel = curImage_HLS[:,:,1]
+	saturation_channel = curImage_HLS[:,:,2]
+
+	# Calculate the directional gradient using the L channel
+	sobelx = cv2.Sobel(lightness_channel, cv2.CV_64F, 1, 0) # Take the derivative in x
+	abs_sobelx = np.absolute(sobelx) # Absolute x derivative to accentuate lines away from horizontal
+	scaled_sobel = np.uint8(255 * abs_sobelx/np.max(abs_sobelx))
+
+	# Threshold with colour based on S channel and gradient with L channel
+	s_channel_bin = np.zeros_like(saturation_channel) # Create and all black binary image
+	s_channel_bin[(saturation_channel >= 145) & (saturation_channel <= 255) | (scaled_sobel >= 20) & (scaled_sobel <= 80)] = 1 # Pixels that meet the thresholds are turned white
+	colour_gradient_thershold_bin = np.uint8(255 * s_channel_bin/np.max(s_channel_bin))
+
+	cv2.imwrite(os.path.join('output_images/', 'output_' + curImage_Name), colour_gradient_thershold_bin)
