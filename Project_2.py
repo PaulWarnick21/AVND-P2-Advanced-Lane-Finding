@@ -10,6 +10,10 @@ import os
 objPoints = [] # 3D points in real world space
 imgPoints = [] # 2D points in image plane
 
+# Parameters for sliding window approach to determine lane line position
+nwindows = 9 # The number of sliding windows
+margin = 100 # The width of the windows +/- margin
+minpix = 50 # The minimum number of pixels found to recenter window
 
 # Camera Calibration
 for curImage_Name in os.listdir("camera_cal/"):
@@ -58,7 +62,46 @@ for curImage_Name in os.listdir("test_images/"):
 
 	# Threshold with colour based on S channel and gradient with L channel
 	s_channel_bin = np.zeros_like(saturation_channel) # Create and all black binary image
-	s_channel_bin[(saturation_channel >= 145) & (saturation_channel <= 255) | (scaled_sobel >= 20) & (scaled_sobel <= 80)] = 1 # Pixels that meet the thresholds are turned white
+	s_channel_bin[(saturation_channel >= 180) & (saturation_channel <= 240) | (scaled_sobel >= 20) & (scaled_sobel <= 100)] = 1 # Pixels that meet the thresholds are turned white
 	colour_gradient_thershold_bin = np.uint8(255 * s_channel_bin/np.max(s_channel_bin))
 
-	cv2.imwrite(os.path.join('output_images/', 'output_' + curImage_Name), colour_gradient_thershold_bin)
+	'''
+	Source and destination points on our image for transforming the prespective
+	so that we see the lane from a birds eye view, this is used to calculate
+	lane curvature
+	'''
+	image_size = (colour_gradient_thershold_bin.shape[1], colour_gradient_thershold_bin.shape[0])
+	transform_srcPoints = np.float32([
+		[115, image_size[1]],
+		[580, 450],
+		[685, 450],
+		[1050, image_size[1]]])
+	transform_dstPoints = np.float32([
+		[320, image_size[1]],
+		[320, 0],
+		[950, 0],
+		[950, image_size[1]]])
+
+	# Determine the Perspective Transform "M" given the source and destination points
+	M = cv2.getPerspectiveTransform(transform_srcPoints, transform_dstPoints)
+	# Warp the image based on the above transform
+	curImage_Warped = cv2.warpPerspective(colour_gradient_thershold_bin, M, image_size, flags=cv2.INTER_LINEAR)
+
+	cv2.imwrite(os.path.join('output_images/', 'output_' + curImage_Name), curImage_Warped)
+
+'''
+	im = plt.imread('test_images/' + curImage_Name)
+	implot = plt.imshow(im)
+	plt.scatter([180], [image_size[1]])
+	plt.scatter([585], [450])
+	plt.scatter([700], [450])
+	plt.scatter([1130], [image_size[1]])
+	plt.show()
+
+
+	print(curImage_Name)
+	plt.plot(histogram)
+	print(leftx_base)
+	print(rightx_base)
+	plt.show()
+'''
