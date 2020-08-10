@@ -3,6 +3,7 @@ import matplotlib.image as mpimg
 import numpy as np
 import cv2
 import os
+from moviepy.editor import VideoFileClip
 
 # Initial arrays for camera calibration
 objPoints = [] # 3D points in real world space
@@ -29,6 +30,10 @@ nwindows = 9 # The number of sliding windows
 margin = 100 # The width of the windows +/- margin
 minpix = 50 # The minimum number of pixels found to recenter window
 
+# Define conversions in x and y from pixels space to meters for lane curvature
+ym_per_pix = 30/720 # meters per pixel in y dimension
+xm_per_pix = 3.7/700 # meters per pixel in x dimension
+
 # Camera Calibration
 for curImage_Name in os.listdir("camera_cal/"):
 	curImage_Cali = mpimg.imread('camera_cal/' + curImage_Name)
@@ -52,8 +57,9 @@ for curImage_Name in os.listdir("camera_cal/"):
 		imgPoints.append(corners)
 		objPoints.append(objP)
 
-for curImage_Name in os.listdir("test_images/"):
-	curImage = mpimg.imread('test_images/' + curImage_Name)
+def process_image(curImage):
+#for curImage_Name in os.listdir("test_images/"):
+#	curImage = mpimg.imread('test_images/' + curImage_Name)
 
 	# Convert to grayscale
 	curImage_Gray = cv2.cvtColor(curImage, cv2.COLOR_RGB2GRAY)
@@ -84,13 +90,14 @@ for curImage_Name in os.listdir("test_images/"):
 	# Determine the Perspective Transform "M" given the source and destination points
 	M = cv2.getPerspectiveTransform(transform_srcPoints, transform_dstPoints)
 
+	# Inverse Perspective Transform for reverting the transformation later
+	Minv = cv2.getPerspectiveTransform(transform_dstPoints, transform_srcPoints)
+
 	# Warp the image based on the above transform
 	curImage_Warped = cv2.warpPerspective(colour_gradient_thershold_bin, M, image_size, flags=cv2.INTER_LINEAR)
 
 	# Take a histogram of the bottom half of the image
 	histogram = np.sum(curImage_Warped[curImage_Warped.shape[0]//2:,:], axis=0)
-
-	out_img = np.dstack((curImage_Warped, curImage_Warped, curImage_Warped)) ## TODO Remove
 
 	# Find the peak of the left and right halves of the histogram
 	# These will be the starting point for the left and right lines
@@ -125,13 +132,7 @@ for curImage_Name in os.listdir("test_images/"):
 		win_xleft_high = leftx_current + margin
 		win_xright_low = rightx_current - margin
 		win_xright_high = rightx_current + margin
-		
-		# Draw the windows on the visualization image
-		cv2.rectangle(out_img,(win_xleft_low,win_y_low),
-		(win_xleft_high,win_y_high),(0,255,0), 2) 
-		cv2.rectangle(out_img,(win_xright_low,win_y_low),
-		(win_xright_high,win_y_high),(0,255,0), 2) 
-		
+
 		# Identify the nonzero pixels in x and y within the window
 		good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & 
 		(nonzerox >= win_xleft_low) &  (nonzerox < win_xleft_high)).nonzero()[0]
@@ -164,6 +165,9 @@ for curImage_Name in os.listdir("test_images/"):
 
 	left_fit = np.polyfit(lefty, leftx, 2)
 	right_fit = np.polyfit(righty, rightx, 2)
+	left_fit_meters = np.polyfit(lefty*ym_per_pix, leftx*xm_per_pix, 2)
+	right_fit_meters = np.polyfit(righty*ym_per_pix, rightx*xm_per_pix, 2)
+
 
 	# Generate x and y values for plotting
 	ploty = np.linspace(0, curImage_Warped.shape[0]-1, curImage_Warped.shape[0] )
@@ -176,17 +180,64 @@ for curImage_Name in os.listdir("test_images/"):
 		left_fitx = 1*ploty**2 + 1*ploty
 		right_fitx = 1*ploty**2 + 1*ploty
 
-	## Visualization ##
-	# Colors in the left and right lane regions
-	out_img[lefty, leftx] = [255, 0, 0]
-	out_img[righty, rightx] = [0, 0, 255]
+	'''
+	Calculates the curvature of polynomial functions in meters
+	'''
 
-	# Plots the left and right polynomials on the lane lines
-	plt.plot(left_fitx, ploty, color='yellow')
-	plt.plot(right_fitx, ploty, color='yellow')
+	# Define y-value where we want radius of curvature
+	# We'll choose the maximum y-value, corresponding to the bottom of the image
+	y_eval = np.max(ploty)
 
-	plt.imshow(out_img)
-	plt.show()
-	print(curImage_Name)
+	# The calculation of R_curve (radius of curvature)
+	left_curverad = ((1 + (2*left_fit_meters[0]*y_eval*ym_per_pix + left_fit_meters[1])**2)**1.5) / np.absolute(2*left_fit_meters[0])
+	right_curverad = ((1 + (2*right_fit_meters[0]*y_eval*ym_per_pix + right_fit_meters[1])**2)**1.5) / np.absolute(2*right_fit_meters[0])
+	average_curverad = round((left_curverad + right_curverad) / 2, 2);
 
-	cv2.imwrite(os.path.join('output_images/', 'output_' + curImage_Name), curImage_Warped)
+	# Create two images for drawing and window selection
+	out_img = np.dstack((curImage_Warped, curImage_Warped, curImage_Warped))
+	window_img = np.zeros_like(out_img)
+
+	# Colour in the lane line pixels
+	out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
+	out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
+
+	# Create an image to draw on
+	curImage_Warped_Zero = np.zeros_like(curImage_Warped).astype(np.uint8)
+	coloured_Warp = np.dstack((curImage_Warped_Zero, curImage_Warped_Zero, curImage_Warped_Zero))
+
+	# Cast the points into usable format for fillPoly() and crop the bottom to avoid highlighting the hood of the vehicle
+	left_points = np.array([np.transpose(np.vstack([left_fitx[0:710], ploty[0:710]]))])
+	right_points = np.array([np.flipud(np.transpose(np.vstack([right_fitx[0:710], ploty[0:710]])))])
+	points = np.hstack((left_points, right_points))
+
+	# Draw the lane onto our image
+	cv2.fillPoly(coloured_Warp, np.int_([points]), (0,255, 0))
+
+	# Invert the transformation to the original perspective
+	curImage_Lane_Boundaries = cv2.warpPerspective(coloured_Warp, Minv, (curImage.shape[1], curImage.shape[0])) 
+	# Combine the result with the original image
+	curImage_Final = cv2.addWeighted(curImage, 1, curImage_Lane_Boundaries, 0.3, 0)
+
+	# Determine the cars offset in meters when compared to the center of the lane
+	laneCenter = ((right_fitx[image_size[1]-1] - left_fitx[image_size[1]-1]) / 2) + left_fitx[image_size[1]-1]
+	carPosition = image_size[0]/2
+	offset = round((carPosition - laneCenter)*xm_per_pix, 2)
+
+	# Add text and display
+	average_rad_string = "Radius of Curvature: %.2f m" % average_curverad
+	offset_string = "Offset from Center: %.2f m" % offset
+
+	cv2.rectangle(curImage_Final, (80, 40), (1220, 180), (255, 0, 0), -1) 
+	cv2.putText(curImage_Final,average_rad_string , (100, 100), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), thickness=2)
+	cv2.putText(curImage_Final, offset_string, (100, 160), cv2.FONT_HERSHEY_PLAIN, 4, (255,255,255), thickness=2)
+
+	# Fix colour and save to files
+	#curImage_Final_Colour = cv2.cvtColor(curImage_Final, cv2.COLOR_BGR2RGB)
+	#cv2.imwrite(os.path.join('output_images/', 'output_' + curImage_Name), curImage_Final_Colour)
+
+	return curImage_Final
+
+# Find lines on project video
+clip = VideoFileClip("project_video.mp4")
+white_clip = clip.fl_image(process_image)
+white_clip.write_videofile('test_videos_output/project_video_result.mp4', audio=False)
